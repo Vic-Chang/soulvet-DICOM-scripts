@@ -5,6 +5,7 @@ import shutil
 import requests
 import dicom2jpg
 import glob
+import argparse
 from pathlib import Path
 from enum import Flag
 from PIL import Image
@@ -26,6 +27,11 @@ class DicomType(Flag):
 
 
 def download_dcm(img_url: str):
+    """
+    Download the source of dicom file and convert it to jpg or gif file ( Determined by dicom file type )
+    :param img_url: Dicom file url
+    :return: Save source of dicom and save as jpg or gif file
+    """
     # Save dicom file to memory
     file_name = parse.parse_qs(parse.urlparse(img_url).query)['image'][0]
     dcm_file = f'{file_name}.dcm'
@@ -36,8 +42,6 @@ def download_dcm(img_url: str):
 
     # Read dicom tag
     dicom_type = dcmread(memory_dicom_file).SOPClassUID
-
-    memory_dicom_file.close()
 
     export_path = 'Results'
     # Check dicom type, ultrasound or CR image
@@ -205,8 +209,11 @@ def download_dcm(img_url: str):
             f.write('影片寬度: ' + str(tag_columns) + '\n')
             print('影片寬度: ', tag_columns)
 
+    memory_dicom_file.close()
 
 
 if __name__ == '__main__':
-    url = ''
-    download_dcm(url)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('url', type=str, help='DICOM file url')
+    args = parser.parse_args()
+    download_dcm(args.url)
