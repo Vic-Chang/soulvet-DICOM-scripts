@@ -1,9 +1,11 @@
 import datetime
+import io
 import os.path
 import shutil
 import requests
 import dicom2jpg
 import glob
+from pathlib import Path
 from enum import Flag
 from PIL import Image
 from urllib import parse
@@ -24,26 +26,45 @@ class DicomType(Flag):
 
 
 def download_dcm(img_url: str):
-    # Save dicom file to local
-    results = requests.get(img_url)
+    # Save dicom file to memory
     file_name = parse.parse_qs(parse.urlparse(img_url).query)['image'][0]
     dcm_file = f'{file_name}.dcm'
-    with open(dcm_file, 'wb') as f:
-        f.write(results.content)
+    results = requests.get(img_url)
+    memory_dicom_file = io.BytesIO()
+    memory_dicom_file.write(results.content)
+    memory_dicom_file.seek(0)
 
-    # Read dicom tag and write to txt
-    ds = dcmread(dcm_file)
-    dicom_type = ds.SOPClassUID
+    # Read dicom tag
+    dicom_type = dcmread(memory_dicom_file).SOPClassUID
 
+    memory_dicom_file.close()
+
+    export_path = 'Results'
     # Check dicom type, ultrasound or CR image
     if dicom_type == DicomType.CR.value:
         # `CR image`
 
-        # Convert dicom to jpg
-        export_path = 'results/CR'
-        dicom2jpg.dicom2jpg(dcm_file, target_root=export_path, anonymous=False)
+        # Save dicom file to local from memory
+        export_path = os.path.join(export_path, 'CR')
+        source_export_path = os.path.join(export_path, 'Source')
+        Path(source_export_path).mkdir(parents=True, exist_ok=True)
+        with open(os.path.join(source_export_path, dcm_file), 'wb') as f:
+            f.write(memory_dicom_file.getvalue())
 
-        with open(f'{file_name}.txt', 'w', encoding='utf-8') as f:
+        # Convert dicom to jpg
+        dicom2jpg.dicom2jpg(source_export_path)
+
+        # Move jpg file to outer path and rename jpg file
+        folder_name = datetime.datetime.now().strftime('%Y%m%d')
+        all_jpg_files = glob.glob(f'{os.path.join(export_path, folder_name)}/**/*.jpg', recursive=True)
+        for jpg_file in all_jpg_files:
+            shutil.move(jpg_file, os.path.join(export_path, f'{file_name}.jpg'))
+
+        # Remove empty folder
+        shutil.rmtree(os.path.join(export_path, folder_name), ignore_errors=True)
+
+        with open(os.path.join(export_path, f'{file_name}.txt'), 'w', encoding='utf-8') as f:
+            ds = dcmread(os.path.join(source_export_path, dcm_file))
             tag_hospital = ds[0x0009, 0x1080].value
             f.write('醫院名稱: ' + str(tag_hospital) + '\n')
             print('醫院名稱: ', tag_hospital)
@@ -97,6 +118,16 @@ def download_dcm(img_url: str):
             print('圖片寬度: ', tag_columns)
     else:
         # `Ultrasound Image`
+
+        # Save dicom file to local from memory
+        export_path = os.path.join(export_path, 'US')
+        source_export_path = os.path.join(export_path, 'Source')
+        Path(source_export_path).mkdir(parents=True, exist_ok=True)
+        with open(os.path.join(source_export_path, dcm_file), 'wb') as f:
+            f.write(memory_dicom_file.getvalue())
+
+        ds = dcmread(os.path.join(source_export_path, dcm_file))
+
         # Check ultrasound type, ultrasound image or multiple frame image
         if dicom_type == DicomType.USM.value:
             # `Ultrasound Multi frame Image Storage`
@@ -124,7 +155,6 @@ def download_dcm(img_url: str):
 
             # Convert all photos into gif, `append_images` must start from second or the first photo will be repeated
             # twice
-            export_path = 'results/US/Multi/'
             frames[0].save(os.path.join(export_path, f'{file_name}.gif'), format='GIF', append_images=frames[1:],
                            save_all=True, duration=frame_time, loop=0)
 
@@ -134,12 +164,11 @@ def download_dcm(img_url: str):
         elif dicom_type == DicomType.US.value:
             # `Ultrasound Image Storage`
 
-            export_path = 'results/US/'
             pixel_array = convert_color_space(ds.pixel_array, 'YBR_FULL_422', 'RGB')
             image = Image.fromarray(pixel_array)
             image.save(os.path.join(export_path, f'{file_name}.png'))
 
-        with open(f'{file_name}.txt', 'w', encoding='utf-8') as f:
+        with open(os.path.join(export_path, f'{file_name}.txt'), 'w', encoding='utf-8') as f:
             tag_datetime = datetime.datetime.strptime((ds.ContentDate + ds.ContentTime), '%Y%m%d%H%M%S')
             f.write('拍攝時間: ' + datetime.datetime.strftime(tag_datetime, '%Y/%m/%d %H:%M:%S') + '\n')
             print('拍攝時間: ', tag_datetime)
@@ -175,6 +204,7 @@ def download_dcm(img_url: str):
             tag_columns = ds.Columns
             f.write('影片寬度: ' + str(tag_columns) + '\n')
             print('影片寬度: ', tag_columns)
+
 
 
 if __name__ == '__main__':
