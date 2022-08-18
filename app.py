@@ -4,10 +4,23 @@ import shutil
 import requests
 import dicom2jpg
 import glob
+from enum import Flag
 from PIL import Image
 from urllib import parse
 from pydicom import dcmread
 from pydicom.pixel_data_handlers.util import convert_color_space
+
+
+class DicomType(Flag):
+    """
+    Dicom image type
+    US: Ultrasound Image
+    USM: Ultrasound Multi frame Image
+    CR: Computed Radiography Image
+    """
+    US = '1.2.840.10008.5.1.4.1.1.6.1'
+    USM = '1.2.840.10008.5.1.4.1.1.3.1'
+    CR = '1.2.840.10008.5.1.4.1.1.1'
 
 
 def download_dcm(img_url: str):
@@ -20,81 +33,15 @@ def download_dcm(img_url: str):
 
     # Read dicom tag and write to txt
     ds = dcmread(dcm_file)
+    dicom_type = ds.SOPClassUID
 
-    # Check dicom type, multi frame or CR image
-    if ds.SOPClassUID == '1.2.840.10008.5.1.4.1.1.3.1':
-        # `Ultrasound Multi frame Image Storage`
-
-        temp_frames_folder = 'temp'
-        if os.path.exists(temp_frames_folder):
-            shutil.rmtree(temp_frames_folder, ignore_errors=True)
-        os.mkdir(temp_frames_folder)
-
-        # Extract and save all frames from dicom
-        for counter, image_pixel_array in enumerate(ds.pixel_array):
-            # Convert color `YBR_FULL_422` to `RGB`, or image color will be weird
-            pixel_array = convert_color_space(image_pixel_array, 'YBR_FULL_422', 'RGB')
-            image = Image.fromarray(pixel_array)
-            image.save(os.path.join(temp_frames_folder, f'img_{counter:03n}.png'))
-
-        # Collect all photos ( frames )
-        frames = []
-        frame_photos = glob.glob(f'{temp_frames_folder}/*.png')
-        for frame in frame_photos:
-            new_frame = Image.open(frame)
-            frames.append(new_frame)
-
-        frame_time = ds.FrameTime
-
-        # Convert all photos into gif, `append_images` must start from second or the first photo will be repeated twice
-        frames[0].save(f'{file_name}.gif', format='GIF', append_images=frames[1:], save_all=True, duration=frame_time,
-                       loop=0)
-
-        # Remove temp photos
-        shutil.rmtree(temp_frames_folder, ignore_errors=True)
-
-        with open(f'{file_name}.txt', 'w', encoding='utf-8') as f:
-            tag_datetime = datetime.datetime.strptime((ds.ContentDate + ds.ContentTime), '%Y%m%d%H%M%S')
-            f.write('拍攝時間: ' + datetime.datetime.strftime(tag_datetime, '%Y/%m/%d %H:%M:%S') + '\n')
-            print('拍攝時間: ', tag_datetime)
-
-            tag_modality = ds.Modality
-            f.write('拍攝類型: ' + str(tag_modality) + '\n')
-            print('拍攝類型: ', tag_modality)
-
-            tag_patient_name = ds.PatientName
-            f.write('名稱: ' + str(tag_patient_name) + '\n')
-            print('名稱: ', tag_patient_name)
-
-            tag_patient_sex = ds.PatientSex
-            f.write('性別: ' + str(tag_patient_sex) + '\n')
-            print('性別: ', tag_patient_sex)
-
-            tag_patient_age = ds.PatientAge
-            f.write('年齡: ' + str(tag_patient_age) + '\n')
-            print('年齡: ', tag_patient_age)
-
-            tag_patient_phone_number = ds.PatientID
-            f.write('手機: ' + str(tag_patient_phone_number) + '\n')
-            print('手機: ', tag_patient_phone_number)
-
-            tag_processing_function = ds.ProcessingFunction
-            f.write('執行方法: ' + str(tag_processing_function) + '\n')
-            print('執行方法: ', tag_processing_function)
-
-            tag_rows = ds.Rows
-            f.write('影片高度: ' + str(tag_rows) + '\n')
-            print('影片高度: ', tag_rows)
-
-            tag_columns = ds.Columns
-            f.write('影片寬度: ' + str(tag_columns) + '\n')
-            print('影片寬度: ', tag_columns)
-
-    else:
-        # CR image
+    # Check dicom type, ultrasound or CR image
+    if dicom_type == DicomType.CR.value:
+        # `CR image`
 
         # Convert dicom to jpg
-        dicom2jpg.dicom2jpg(dcm_file)
+        export_path = 'results/CR'
+        dicom2jpg.dicom2jpg(dcm_file, target_root=export_path, anonymous=False)
 
         with open(f'{file_name}.txt', 'w', encoding='utf-8') as f:
             tag_hospital = ds[0x0009, 0x1080].value
@@ -148,6 +95,86 @@ def download_dcm(img_url: str):
             tag_columns = ds.Columns
             f.write('圖片寬度: ' + str(tag_columns) + '\n')
             print('圖片寬度: ', tag_columns)
+    else:
+        # `Ultrasound Image`
+        # Check ultrasound type, ultrasound image or multiple frame image
+        if dicom_type == DicomType.USM.value:
+            # `Ultrasound Multi frame Image Storage`
+
+            temp_frames_folder = 'temp'
+            if os.path.exists(temp_frames_folder):
+                shutil.rmtree(temp_frames_folder, ignore_errors=True)
+            os.mkdir(temp_frames_folder)
+
+            # Extract and save all frames from dicom
+            for counter, image_pixel_array in enumerate(ds.pixel_array):
+                # Convert color `YBR_FULL_422` to `RGB`, or image color will be weird
+                pixel_array = convert_color_space(image_pixel_array, 'YBR_FULL_422', 'RGB')
+                image = Image.fromarray(pixel_array)
+                image.save(os.path.join(temp_frames_folder, f'img_{counter:03n}.png'))
+
+            # Collect all photos ( frames )
+            frames = []
+            frame_photos = glob.glob(f'{temp_frames_folder}/*.png')
+            for frame in frame_photos:
+                new_frame = Image.open(frame)
+                frames.append(new_frame)
+
+            frame_time = ds.FrameTime
+
+            # Convert all photos into gif, `append_images` must start from second or the first photo will be repeated
+            # twice
+            export_path = 'results/US/Multi/'
+            frames[0].save(os.path.join(export_path, f'{file_name}.gif'), format='GIF', append_images=frames[1:],
+                           save_all=True, duration=frame_time, loop=0)
+
+            # Remove temp photos
+            shutil.rmtree(temp_frames_folder, ignore_errors=True)
+
+        elif dicom_type == DicomType.US.value:
+            # `Ultrasound Image Storage`
+
+            export_path = 'results/US/'
+            pixel_array = convert_color_space(ds.pixel_array, 'YBR_FULL_422', 'RGB')
+            image = Image.fromarray(pixel_array)
+            image.save(os.path.join(export_path, f'{file_name}.png'))
+
+        with open(f'{file_name}.txt', 'w', encoding='utf-8') as f:
+            tag_datetime = datetime.datetime.strptime((ds.ContentDate + ds.ContentTime), '%Y%m%d%H%M%S')
+            f.write('拍攝時間: ' + datetime.datetime.strftime(tag_datetime, '%Y/%m/%d %H:%M:%S') + '\n')
+            print('拍攝時間: ', tag_datetime)
+
+            tag_modality = ds.Modality
+            f.write('拍攝類型: ' + str(tag_modality) + '\n')
+            print('拍攝類型: ', tag_modality)
+
+            tag_patient_name = ds.PatientName
+            f.write('名稱: ' + str(tag_patient_name) + '\n')
+            print('名稱: ', tag_patient_name)
+
+            tag_patient_sex = ds.PatientSex
+            f.write('性別: ' + str(tag_patient_sex) + '\n')
+            print('性別: ', tag_patient_sex)
+
+            tag_patient_age = ds.PatientAge
+            f.write('年齡: ' + str(tag_patient_age) + '\n')
+            print('年齡: ', tag_patient_age)
+
+            tag_patient_phone_number = ds.PatientID
+            f.write('手機: ' + str(tag_patient_phone_number) + '\n')
+            print('手機: ', tag_patient_phone_number)
+
+            tag_processing_function = ds.ProcessingFunction
+            f.write('執行方法: ' + str(tag_processing_function) + '\n')
+            print('執行方法: ', tag_processing_function)
+
+            tag_rows = ds.Rows
+            f.write('影片高度: ' + str(tag_rows) + '\n')
+            print('影片高度: ', tag_rows)
+
+            tag_columns = ds.Columns
+            f.write('影片寬度: ' + str(tag_columns) + '\n')
+            print('影片寬度: ', tag_columns)
 
 
 if __name__ == '__main__':
